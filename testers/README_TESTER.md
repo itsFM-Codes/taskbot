@@ -18,6 +18,7 @@ Additional helpful options
 - --mock-time=VAL    : freeze time for the run (ISO string or epoch ms)
 - --retry=N          : retry failed commands up to N times
 - --timeout=MS       : per-command timeout in milliseconds
+- --retry-delay=MS   : wait MS milliseconds between retry attempts (default 200ms)
 
 Running via the provided launchers
 

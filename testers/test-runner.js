@@ -65,6 +65,7 @@ async function run() {
   let mockTime = null; // epoch ms to freeze Date
   let retryCount = 0; // number of retries on failure
   let timeoutMs = null; // per-command timeout in ms
+  let retryDelayMs = 200; // delay between retries in ms (default)
 
   for (const a of rawArgs) {
     if (a === '--silent' || a === '-s') { silent = true; continue; }
@@ -89,6 +90,7 @@ async function run() {
     continue;
   }
   if (a.startsWith('--retry=')) { const v = parseInt(a.substring(8), 10); if (isNaN(v) || v < 0) { console.error('Invalid --retry value, expected non-negative integer'); process.exit(2); } retryCount = v; continue; }
+  if (a.startsWith('--retry-delay=')) { const v = parseInt(a.substring(14), 10); if (isNaN(v) || v < 0) { console.error('Invalid --retry-delay value, expected non-negative integer'); process.exit(2); } retryDelayMs = v; continue; }
   if (a.startsWith('--timeout=')) { const v = parseInt(a.substring(10), 10); if (isNaN(v) || v < 1) { console.error('Invalid --timeout value, expected milliseconds as positive integer'); process.exit(2); } timeoutMs = v; continue; }
     // positional first arg
   if (a.startsWith('-')) { console.error(`Unrecognized option: ${a}`); process.exit(2); }
@@ -96,31 +98,32 @@ async function run() {
   }
 
   if (showHelp) {
-    const help = [];
-    help.push('test-runner usage: node test-runner.js [testerFile] [options]');
-    help.push('');
-    help.push('Options:');
-    const pad = (s, n) => s + ' '.repeat(Math.max(0, n - s.length));
-    help.push(`  ${pad('--silent, -s', 20)}: minimal output (only OK/ERR)`);
-    help.push(`  ${pad('--fail-on-err', 20)}: exit with code 1 if any command fails`);
-    help.push(`  ${pad('--no-backup', 20)}: do not backup/restore data.json`);
-    help.push(`  ${pad("--only=cmd1,cmd2", 20)}: run only the named commands (comma-separated)`);
-    help.push(`  ${pad('--report', 20)}: write a JSON report to the default 'reports/' folder (timestamped)`);
-  help.push(`  ${pad('--report=path', 20)}: write a JSON report to the given file or directory`);
-  help.push(`  ${pad('--dry-run', 20)}: show planned commands but do not execute them`);
-  help.push(`  ${pad('--limit=N', 20)}: stop after N commands from the sequence`);
-  help.push(`  ${pad('--list', 20)}: list available commands and exit`);
-  help.push(`  ${pad('--mock-time=VAL', 20)}: freeze time to ISO/epoch ms VAL for the run`);
-  help.push(`  ${pad('--retry=N', 20)}: retry failed commands up to N times`);
-  help.push(`  ${pad('--timeout=MS', 20)}: per-command timeout in milliseconds`);
-    help.push(`  ${pad('--help, -h', 20)}: show this help`);
-    help.push('');
-    help.push('Examples:');
-    help.push('  node testers/test-runner.js --silent --report');
-    help.push('  node testers/test-runner.js --report=results.json');
-    help.push('  testers\\run-windows.ps1 --silent --report');
-    help.push('  ./testers/run-linux.sh --silent --report');
-    console.log(help.join('\n'));
+    const lines = [
+      'test-runner usage: node test-runner.js [testerFile] [options]',
+      '',
+      'Options:',
+      '  --silent, -s        Minimal output (only OK/ERR)',
+      '  --fail-on-err       Exit with code 1 if any command fails',
+      '  --no-backup         Do not backup/restore data.json',
+      '  --only=cmd1,cmd2    Run only the named commands (comma-separated)',
+      '  --report            Write JSON report to default reports/ folder',
+      '  --report=path       Write JSON report to specified file or directory',
+      '  --dry-run           Show planned commands and exit (no side-effects)',
+      '  --limit=N           Run only first N commands from the sequence',
+      '  --list              List available commands and exit',
+      '  --mock-time=VAL     Freeze time (ISO, "YYYY-MM-DD HH:MM[:SS]" or epoch ms)',
+      '  --retry=N           Retry failed commands up to N times',
+      '  --retry-delay=MS    Delay between retries in ms (default 200)',
+      '  --timeout=MS        Per-command timeout in milliseconds',
+      '  --help, -h          Show this help',
+      '',
+      'Examples:',
+      '  node testers/test-runner.js --silent --report',
+      '  node testers/test-runner.js --report=results.json',
+      '  testers\\run-windows.ps1 --silent --report',
+      '  ./testers/run-linux.sh --silent --report',
+    ];
+    console.log(lines.join('\n'));
     return;
   }
 
@@ -284,28 +287,48 @@ async function run() {
       });
     };
 
+    const sleep = (ms) => new Promise(res => setTimeout(res, ms));
     let attempt = 0;
     while (true) {
       attempt += 1;
       try {
+        const start = Date.now();
         await runWithTimeout(() => cmd.execute({ interaction, dataHandler, scheduler: schedulerStub }));
+        const elapsed = Date.now() - start;
+        // If timeoutMs is set and elapsed exceeds it, treat as timeout failure.
+        if (timeoutMs && elapsed > timeoutMs) {
+          const m = `Command exceeded timeout: ${elapsed} ms > ${timeoutMs} ms`;
+          if (attempt <= retryCount) {
+            always(`Retry ${attempt}/${retryCount} for /${name} after timeout: ${m}`);
+            interaction.replied = false;
+            interaction.lastReply = null;
+            interaction.replies = [];
+            if (retryDelayMs > 0) await sleep(retryDelayMs);
+            continue;
+          }
+          always(`ERR running /${name}: ${m}`);
+          stats.err += 1;
+          results.push({ name, ok: false, message: m, reply: interaction.lastReply || null, elapsed });
+          break;
+        }
         always(`OK: /${name}`);
         stats.ok += 1;
-        results.push({ name, ok: true, message: `OK: /${name}`, reply: interaction.lastReply || null });
+        results.push({ name, ok: true, message: `OK: /${name}`, reply: interaction.lastReply || null, elapsed });
         break;
       } catch (err) {
+        const elapsed = null;
         const m = err && err.stack ? err.stack : String(err);
         if (attempt <= retryCount) {
           always(`Retry ${attempt}/${retryCount} for /${name} after error: ${m}`);
-          // clear interaction state between attempts
           interaction.replied = false;
           interaction.lastReply = null;
           interaction.replies = [];
+          if (retryDelayMs > 0) await sleep(retryDelayMs);
           continue;
         }
         always(`ERR running /${name}: ${m}`);
         stats.err += 1;
-        results.push({ name, ok: false, message: m, reply: interaction.lastReply || null });
+        results.push({ name, ok: false, message: m, reply: interaction.lastReply || null, elapsed });
         break;
       }
     }
@@ -333,6 +356,13 @@ async function run() {
   // Final summary (use original console to ensure visibility even in silent mode)
   try {
     origConsoleLog(`TEST SUMMARY: ${stats.ok} OK, ${stats.err} ERR`);
+  } catch (e) { /* ignore */ }
+  // If there were failures, print a concise list of which commands failed
+  try {
+    if (stats.err > 0) {
+      const failed = results.filter(r => !r.ok).map(r => `/${r.name}`);
+      if (failed.length) origConsoleLog(`FAILED COMMANDS: ${failed.join(', ')}`);
+    }
   } catch (e) { /* ignore */ }
   if (failOnErr && stats.err > 0) {
     origConsoleLog('Fail-on-err enabled and some commands failed. Setting exit code 1.');
