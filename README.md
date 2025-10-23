@@ -19,10 +19,10 @@ This project implements a Discord bot that manages a simple task queue per user 
 
 - Configured via environment variables
 - Synchronous file-based persistence for simplicity (suitable for light workloads)
-- A small smoke-test runner to validate command logic without a live Discord connection
+- Includes a smoke-test runner to validate commands without connecting to Discord
 
 ## Repository layout
-- `index.js` — main entry (registers and slash commands and boots the bot)
+- `index.js` — main entry (registers slash commands and starts the bot)
 - `commands/` — command modules (each exports `data` and `execute`)
 - `utils/logger.js` — timestamped logger (console + daily files under `logs/`)
 - `utils/dataHandler.js` — read/write helpers for `data.json`
@@ -39,71 +39,30 @@ This project implements a Discord bot that manages a simple task queue per user 
 Clone the repo and install dependencies:
 
 ```powershell
-git clone <repo-url>
+git clone https://github.com/itsFM-Codes/taskbot
 cd task
 npm install
 ```
 
-Note: replace `<repo-url>` with your repository clone URL.
-
 ## Configuration
-You can configure the bot either via environment variables (recommended for production) or by placing a `config.json` file in the repository root for local/development use.
+To configure, please copy the provided `config.example.json` to  `config.json` and fill in the values. Please do NOT commit `config.json` with real secrets. See `.gitignore`
 
-If you choose `config.json`, copy the provided `config.example.json` to `config.json` and fill in the values. Do NOT commit `config.json` with real secrets — see `.gitignore`.
-
-Example `config.json` (development, do not commit):
+Example `config.json`:
 
 ```json
 {
-	"discord": {
-		"token": "<DISCORD_TOKEN - prefer using env vars for production>",
-		"clientId": "<CLIENT_ID>",
-		"guildId": "<GUILD_ID - optional for dev registration>"
-	},
-	"paths": {
-		"dataFile": "data.json",
-		"logsDir": "logs",
-		"backupDir": "backups"
-	},
-	"reminders": {
-		"enabled": false,
-		"defaultHours": 24
-	},
-	"backup": {
-		"enabled": true,
-		"keepCopies": 7
-	},
-	"logging": {
-		"toFile": true,
-		"level": "info"
-	}
+  "token": "YOUR_BOT_TOKEN",
+  "owner_id": "YourID"
 }
 ```
 
-Environment variables supported (these override `config.json` when present):
-
-- `DISCORD_TOKEN` — bot token (recommended)
-- `CLIENT_ID` — application client id
-- `GUILD_ID` — development guild id (optional)
-
-Tip: For production use, keep secrets in your process manager or secret store and prefer environment variables.
-
 ## Run and deploy
-Local development (quick):
+Run locally (development mode):
 
 ```powershell
 node index.js
 ```
 
-Suggested `package.json` scripts (add these to make running consistent):
-
-```
-"scripts": {
-	"start": "node index.js",
-	"test-runner": "node testers/test-runner.js",
-	"lint": "eslint . || true"
-}
-```
 
 For production, run the bot under a process manager (PM2, systemd, Docker). Example with PM2:
 
